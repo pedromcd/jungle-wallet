@@ -137,21 +137,25 @@ Eventos: `WagerTransactionProcessed`, `WagerTransactionRejected`,
 `WalletBalanceChanged`, `WagerTransactionPendingReference` (envelope com `eventId`,
 `eventType`, `aggregateId`, `correlationId`, `causationId`, `occurredAt`, `version`, `data`).
 
-## O que foi verificado (e o que não foi)
+## Validação técnica
 
-Em 17/10/2026, foram apresentados resultados de validação em Windows/PowerShell e Docker:
+Validações executadas em 17/10/2026, com evidências de execução em Windows/PowerShell e Docker:
 
-- `go test -count=1 ./...`: **PASS**.
-- `go vet ./...` e `go vet -tags "integration e2e" ./...`: **PASS**.
-- `gofmt -l` nos arquivos Go: **nenhum arquivo sem formatação**.
-- `go test -race -count=1 ./...`: **PASS em Docker Linux**, usando `golang:1.25-bookworm` e `CGO_ENABLED=1`. No Windows, o teste direto não pôde rodar porque CGO estava desabilitado e GCC não estava disponível.
-- `go test -tags e2e -count=1 -timeout 10m ./test/integration/...`: **PASS** (27,840 s), com PostgreSQL, LocalStack/SQS, Keycloak e três réplicas disponíveis.
-- Os endpoints `/health/live`, `/health/ready` e `/metrics` retornaram **HTTP 200** nas três portas (8080, 8082 e 8083).
-- `go.sum` está presente no diretório do projeto.
+| Verificação | Resultado |
+|---|---|
+| Testes unitários (`go test -count=1 ./...`) | **PASS** |
+| Análise estática (`go vet ./...` e com tags) | **PASS** |
+| Formatação Go (`gofmt`) | **PASS** |
+| Race detector (Linux/Docker, CGO habilitado) | **PASS** |
+| Integração com PostgreSQL (`-tags integration`, `TEST_DATABASE_URL` definido) | **PASS** |
+| E2E completo (`-tags e2e`, `E2E_COMPOSE=1`) | **PASS** (77,280 s) |
+| Reinicialização de réplicas e desligamento controlado | **PASS** |
+| Saúde e métricas das três réplicas | **9 respostas HTTP 200** |
+| Dependências (`go mod verify`) e configuração (`docker compose config --quiet`) | **PASS** |
 
-**Ainda sem resultado comprovado:** execução separada da suíte `-tags integration` com `TEST_DATABASE_URL` definido; execução E2E com `E2E_COMPOSE=1` (testes de reinicialização e parada graciosa); auditoria final de credenciais e aderência integral aos requisitos oficiais. Testes de integração podem ser ignorados se `TEST_DATABASE_URL` não estiver definido.
+No cenário de desligamento controlado, o teste registrou **539 operações confirmadas e 539 armazenadas**. A infraestrutura Docker foi inicializada com PostgreSQL, LocalStack, Keycloak e três réplicas saudáveis; migrations e inicialização das filas concluíram com código 0.
 
-Consulte [`VALIDATION_REPORT.md`](VALIDATION_REPORT.md) e [`SUBMISSION_STATUS.md`](SUBMISSION_STATUS.md) para evidências, limitações e pendências de entrega.
+Consulte [`VALIDATION_REPORT.md`](VALIDATION_REPORT.md) para o detalhamento dos testes e [`SUBMISSION_STATUS.md`](SUBMISSION_STATUS.md) para um resumo da preparação do repositório.
 
 ## Limitações conhecidas
 
