@@ -1,0 +1,102 @@
+﻿# Local stack: PostgreSQL, LocalStack (SQS FIFO), Keycloak and THREE independent
+# replicas of the service (app1..app3) to exercise horizontal scaling.
+#   docker compose up -d --build          # start everything
+#   docker compose run --rm migrate down 1  # revert the last migration
+name: jungle-wallet
+
+x-app: &app
+  build: .
+  depends_on:
+    postgres:   { condition: service_healthy }
+    migrate:    { condition: service_completed_successfully }
+    queues-init: { condition: service_completed_successfully }
+    keycloak:   { condition: service_started }
+  environment: &app-env
+    DATABASE_URL: postgres://wallet:wallet@postgres:5432/wallet?sslmode=disable
+    SQS_ENDPOINT: http://localstack:4566
+    AWS_REGION: us-east-1
+    AWS_ACCESS_KEY_ID: test
+    AWS_SECRET_ACCESS_KEY: test
+    OIDC_ISSUER: http://localhost:8081/realms/wallet
+    OIDC_JWKS_URL: http://keycloak:8080/realms/wallet/protocol/openid-connect/certs
+    OIDC_AUDIENCE: wallet-api
+    LOG_LEVEL: info
+    # short pending-reference policy so the end-to-end tests finish quickly
+    PENDING_MAX_ATTEMPTS: "4"
+    PENDING_BACKOFF_BASE: 1s
+    PENDING_BACKOFF_MAX: 4s
+    VISIBILITY_TIMEOUT: 20s
+    SHUTDOWN_TIMEOUT: 25s
+  stop_grace_period: 40s
+  healthcheck:
+    test: ["CMD", "/walletd", "healthcheck"]
+    interval: 5s
+    timeout: 4s
+    retries: 12
+    start_period: 10s
+  restart: unless-stopped
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment: { POSTGRES_USER: wallet, POSTGRES_PASSWORD: wallet, POSTGRES_DB: wallet }
+    command: ["postgres", "-c", "max_connections=300"]
+    ports: ["5432:5432"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U wallet -d wallet"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  migrate:
+    image: migrate/migrate:v4.17.1
+    depends_on:
+      postgres: { condition: service_healthy }
+    volumes: ["./migrations:/migrations:ro"]
+    command: ["-path=/migrations", "-database=postgres://wallet:wallet@postgres:5432/wallet?sslmode=disable", "up"]
+
+  localstack:
+    # pinned: newer LocalStack images require an auth token; MiniStack is a drop-in alternative
+    image: localstack/localstack:3.8.1
+    environment: { SERVICES: sqs }
+    ports: ["4566:4566"]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:4566/_localstack/health | grep -Eq '\"sqs\": \"(available|running)\"'"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+
+  queues-init:
+    image: amazon/aws-cli:2.17.0
+    depends_on:
+      localstack: { condition: service_healthy }
+    environment: { AWS_ACCESS_KEY_ID: test, AWS_SECRET_ACCESS_KEY: test, AWS_DEFAULT_REGION: us-east-1 }
+    volumes: ["./deploy/localstack/init-queues.sh:/init-queues.sh:ro"]
+    entrypoint: ["sh", "/init-queues.sh"]
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.0
+    command: ["start-dev", "--import-realm"]
+    environment:
+      KEYCLOAK_ADMIN: admin
+      KEYCLOAK_ADMIN_PASSWORD: admin
+      KC_HTTP_ENABLED: "true"
+      # tokens always carry this public issuer, whichever host name served them
+      KC_HOSTNAME: http://localhost:8081
+      KC_HOSTNAME_BACKCHANNEL_DYNAMIC: "true"
+    volumes: ["./deploy/keycloak/realm.json:/opt/keycloak/data/import/realm.json:ro"]
+    ports: ["8081:8080"]
+
+  app1:
+    <<: *app
+    environment: { <<: *app-env, INSTANCE_ID: app1 }
+    ports: ["8080:8080"]
+  app2:
+    <<: *app
+    environment: { <<: *app-env, INSTANCE_ID: app2 }
+    ports: ["8082:8080"]
+  app3:
+    <<: *app
+    environment: { <<: *app-env, INSTANCE_ID: app3 }
+    ports: ["8083:8080"]
+
